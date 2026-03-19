@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../../api/axios';
 import AppShell from '../../components/layout/AppShell';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, Users, ChevronRight, Loader2 } from 'lucide-react';
+import { Plus, Search, Users, ChevronRight, Loader2, Edit, Power, PowerOff } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
 import theme from '../../theme';
 
@@ -38,6 +39,18 @@ const EmployeeList = () => {
   const getRoleStyle = (role) => {
     const c = theme.roleColors[role] || theme.roleColors.Employee;
     return { background: c.bg, color: c.text };
+  };
+
+  const handleToggleStatus = async (e, emp) => {
+    e.stopPropagation();
+    try {
+      const newStatus = emp.status === 'Active' ? 'Inactive' : 'Active';
+      await api.patch(`/employees/${emp._id}/status`, { status: newStatus });
+      toast.success(`Employee marked as ${newStatus}`);
+      fetchEmployees();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to change status');
+    }
   };
 
   return (
@@ -100,12 +113,12 @@ const EmployeeList = () => {
                   <th>Role</th>
                   <th>Status</th>
                   <th>Joined</th>
-                  <th></th>
+                  <th style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {employees.map((emp) => (
-                  <tr key={emp._id} onClick={() => navigate(`/employees/${emp._id}`)} style={{ cursor: 'pointer' }}>
+                  <tr key={emp._id} onClick={() => navigate(`/employees/${emp._id}/edit`)} style={{ cursor: 'pointer' }}>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                         <div style={{
@@ -137,7 +150,33 @@ const EmployeeList = () => {
                     <td style={{ color: 'var(--color-text-secondary)', fontSize: '0.85rem' }}>
                       {emp.joiningDate ? new Date(emp.joiningDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
                     </td>
-                    <td><ChevronRight size={16} color="var(--color-text-tertiary)" /></td>
+                    <td onClick={(e) => e.stopPropagation()} style={{ textAlign: 'right' }}>
+                      <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                        <button 
+                          className="btn-secondary" 
+                          style={{ padding: '6px', minWidth: 'auto', background: 'transparent', border: '1px solid var(--color-border)', color: 'var(--color-text-secondary)' }}
+                          onClick={() => navigate(`/employees/${emp._id}/edit`)}
+                          title="Edit"
+                        >
+                          <Edit size={16} />
+                        </button>
+                        {CAN_CREATE.includes(user?.role) && (
+                          <button 
+                            className="btn-secondary" 
+                            style={{ 
+                              padding: '6px', minWidth: 'auto', 
+                              background: emp.status === 'Active' ? 'rgba(239,68,68,0.05)' : 'rgba(16,185,129,0.05)', 
+                              border: `1px solid ${emp.status === 'Active' ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)'}`, 
+                              color: emp.status === 'Active' ? '#DC2626' : '#059669' 
+                            }}
+                            onClick={(e) => handleToggleStatus(e, emp)}
+                            title={emp.status === 'Active' ? "Deactivate" : "Activate"}
+                          >
+                            {emp.status === 'Active' ? <PowerOff size={16} /> : <Power size={16} />}
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>

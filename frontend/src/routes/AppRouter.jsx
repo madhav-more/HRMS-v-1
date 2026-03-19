@@ -9,7 +9,14 @@ import AttendancePage from '../pages/attendance/AttendancePage';
 import AttendanceSummary from '../pages/attendance/AttendanceSummary';
 import EmployeeList from '../pages/employees/EmployeeList';
 import CreateEmployee from '../pages/employees/CreateEmployee';
+import EditEmployee from '../pages/employees/EditEmployee';
 import ProfilePage from '../pages/profile/ProfilePage';
+import MyLeaves from '../pages/leaves/MyLeaves';
+import ApplyLeave from '../pages/leaves/ApplyLeave';
+import LeaveApproval from '../pages/leaves/LeaveApproval';
+import LeaveDashboard from '../pages/leaves/LeaveDashboard';
+import Announcements from '../pages/announcements/Announcements';
+import ManageAnnouncements from '../pages/announcements/ManageAnnouncements';
 
 const CAN_CREATE = ['SuperUser', 'HR', 'Director', 'VP', 'GM'];
 const ALL_ROLES = ['SuperUser', 'HR', 'Manager', 'Director', 'VP', 'GM', 'Employee', 'Intern'];
@@ -51,11 +58,36 @@ const AppRouter = () => (
           <ProtectedRoute allowedRoles={ALL_ROLES}><AttendanceSummary /></ProtectedRoute>
         } />
 
+        {/* Leaves */}
+        <Route path="/leaves" element={
+          <ProtectedRoute allowedRoles={ALL_ROLES}><MyLeaves /></ProtectedRoute>
+        } />
+        <Route path="/leaves/apply" element={
+          <ProtectedRoute allowedRoles={ALL_ROLES}><ApplyLeave /></ProtectedRoute>
+        } />
+        <Route path="/leave-approvals" element={
+          <ProtectedRoute allowedRoles={MANAGEMENT_PLUS}><LeaveApproval /></ProtectedRoute>
+        } />
+        <Route path="/leave-dashboard" element={
+          <ProtectedRoute allowedRoles={['SuperUser', 'HR', 'Director']}><LeaveDashboard /></ProtectedRoute>
+        } />
+
+        {/* Announcements */}
+        <Route path="/announcements" element={
+          <ProtectedRoute allowedRoles={ALL_ROLES}><Announcements /></ProtectedRoute>
+        } />
+        <Route path="/manage-announcements" element={
+          <ProtectedRoute allowedRoles={MANAGEMENT_PLUS}><ManageAnnouncements /></ProtectedRoute>
+        } />
+
         <Route path="/employees" element={
           <ProtectedRoute allowedRoles={MANAGEMENT_PLUS}><EmployeeList /></ProtectedRoute>
         } />
         <Route path="/employees/create" element={
           <ProtectedRoute allowedRoles={CAN_CREATE}><CreateEmployee /></ProtectedRoute>
+        } />
+        <Route path="/employees/:id/edit" element={
+          <ProtectedRoute allowedRoles={CAN_CREATE}><EditEmployee /></ProtectedRoute>
         } />
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

@@ -121,19 +121,15 @@ export const updateProfile = asyncHandler(async (req, res) => {
   const employee = await Employee.findById(req.user._id);
   if (!employee) throw new ApiError(404, 'Employee not found');
 
-  const { phone, currentAddress, permanentAddress, bloodGroup, emergencyContactName, emergencyContactNumber } = req.body;
+  const { mobileNumber, currentAddress, permanentAddress, bloodGroup, emergencyContactName, emergencyContactMobile } = req.body;
 
-  if (phone) employee.phone = phone;
+  if (mobileNumber) employee.mobileNumber = mobileNumber;
   if (currentAddress) employee.currentAddress = currentAddress;
   if (permanentAddress) employee.permanentAddress = permanentAddress;
   if (bloodGroup) employee.bloodGroup = bloodGroup;
   
-  if (emergencyContactName || emergencyContactNumber) {
-    employee.emergencyContact = {
-      name: emergencyContactName || employee.emergencyContact?.name,
-      phone: emergencyContactNumber || employee.emergencyContact?.phone,
-    };
-  }
+  if (emergencyContactName) employee.emergencyContactName = emergencyContactName;
+  if (emergencyContactMobile) employee.emergencyContactMobile = emergencyContactMobile;
 
   // Handle Cloudinary Upload
   if (req.file) {

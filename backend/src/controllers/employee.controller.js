@@ -234,23 +234,27 @@ export const updateEmployee = asyncHandler(async (req, res) => {
   res.json(new ApiResponse(200, employee.toSafeObject(), 'Employee updated successfully'));
 });
 
-// ─── DEACTIVATE EMPLOYEE ──────────────────────────────────────────────────────
-export const deactivateEmployee = asyncHandler(async (req, res) => {
+// ─── TOGGLE EMPLOYEE STATUS ───────────────────────────────────────────────────
+export const toggleEmployeeStatus = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { reason } = req.body;
+  const { status, reason } = req.body;
 
-  if (!['SuperUser', 'HR'].includes(req.user.role)) {
-    throw new ApiError(403, 'Only HR/SuperUser can deactivate employees');
+  if (!CAN_EDIT_EMPLOYEE.includes(req.user.role)) {
+    throw new ApiError(403, 'Insufficient permissions to change employee status');
   }
 
   const employee = await Employee.findById(id);
   if (!employee) throw new ApiError(404, 'Employee not found');
 
-  employee.status = 'Inactive';
-  employee.deactivateReason = reason;
+  employee.status = status;
+  if (status === 'Inactive') {
+    employee.deactivateReason = reason || 'No reason provided';
+  } else {
+    employee.deactivateReason = null;
+  }
   await employee.save({ validateBeforeSave: false });
 
-  res.json(new ApiResponse(200, null, 'Employee deactivated'));
+  res.json(new ApiResponse(200, employee.toSafeObject(), `Employee status changed to ${status}`));
 });
 
 // ─── GET DEPARTMENTS ──────────────────────────────────────────────────────────

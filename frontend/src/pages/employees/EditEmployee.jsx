@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import api from '../../api/axios';
 import toast from 'react-hot-toast';
 import AppShell from '../../components/layout/AppShell';
-import { Loader2, Upload, User, ArrowLeft, Check, FileText, ChevronDown, ChevronUp } from 'lucide-react';
+import { Loader2, Upload, User, ArrowLeft, Check, ChevronDown, ChevronUp, FileText } from 'lucide-react';
 
 const ROLES = ['SuperUser', 'HR', 'Manager', 'Director', 'VP', 'GM', 'Employee', 'Intern'];
 const DEPARTMENTS = ['IT', 'HR', 'Finance', 'Marketing', 'Accounting', 'Operations', 'General Manager'];
@@ -48,52 +48,63 @@ const Field = ({ label, required, children, fullWidth }) => (
   </div>
 );
 
-const FileUploadField = ({ label, onChange, file, accept = ".pdf,.jpg,.jpeg,.png", required }) => (
-  <div style={{ border: '1px dashed var(--color-border)', borderRadius: '12px', padding: '16px', textAlign: 'center', background: file ? 'rgba(16,185,129,0.05)' : 'var(--color-surface-alt)', transition: 'all 0.2s', position: 'relative' }}>
-    <label style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-      <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: file ? 'rgba(16,185,129,0.1)' : 'var(--color-surface)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: file ? '#10B981' : 'var(--color-text-tertiary)' }}>
-        {file ? <Check size={20} /> : <Upload size={20} />}
-      </div>
-      <div>
-        <div style={{ fontWeight: 600, fontSize: '0.9rem', color: file ? '#10B981' : 'var(--color-text)' }}>
-          {file ? file.name : `Upload ${label}`} {required && !file && <span style={{ color: '#EF4444' }}>*</span>}
+const FileUploadField = ({ label, onChange, file, existingUrl, accept = ".pdf,.jpg,.jpeg,.png", required }) => {
+  const hasContent = file || existingUrl;
+  const isPdf = existingUrl?.toLowerCase().endsWith('.pdf');
+  
+  return (
+    <div style={{ border: '1px dashed var(--color-border)', borderRadius: '12px', padding: '16px', textAlign: 'center', background: hasContent ? 'rgba(16,185,129,0.05)' : 'var(--color-surface-alt)', transition: 'all 0.2s', position: 'relative' }}>
+      <label style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+        <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: hasContent ? 'rgba(16,185,129,0.1)' : 'var(--color-surface)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: hasContent ? '#10B981' : 'var(--color-text-tertiary)' }}>
+          {file ? <Check size={20} /> : existingUrl ? (isPdf ? <FileText size={20}/> : <Check size={20}/>) : <Upload size={20} />}
         </div>
-        {!file && <div style={{ fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>Click to browse</div>}
-      </div>
-      <input type="file" accept={accept} onChange={(e) => onChange(e.target.files[0])} style={{ display: 'none' }} />
-    </label>
-  </div>
-);
+        <div>
+          <div style={{ fontWeight: 600, fontSize: '0.9rem', color: hasContent ? '#10B981' : 'var(--color-text)' }}>
+            {file ? file.name : existingUrl ? `Replace ${label}` : `Upload ${label}`} {required && !hasContent && <span style={{ color: '#EF4444' }}>*</span>}
+          </div>
+          {existingUrl && !file && (
+            <a 
+              href={existingUrl} 
+              target="_blank" 
+              rel="noreferrer" 
+              onClick={e => e.stopPropagation()} 
+              style={{ fontSize: '0.75rem', color: '#2076C7', textDecoration: 'underline', marginTop: '4px', display: 'inline-block' }}
+            >
+              View Current File
+            </a>
+          )}
+          {!hasContent && <div style={{ fontSize: '0.75rem', color: 'var(--color-text-tertiary)' }}>Click to browse</div>}
+        </div>
+        <input type="file" accept={accept} onChange={(e) => onChange(e.target.files[0])} style={{ display: 'none' }} />
+      </label>
+    </div>
+  );
+};
 
-const CreateEmployee = () => {
+const EditEmployee = () => {
+  const { id } = useParams();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
-  const [nextCode, setNextCode] = useState('Loading...');
+  const [initLoading, setInitLoading] = useState(true);
+  const [employeeCode, setEmployeeCode] = useState('');
   const [imagePreview, setImagePreview] = useState(null);
   
   const [form, setForm] = useState({
-    // 1. Basic Details
     name: '', email: '', mobileNumber: '', alternateMobileNumber: '',
     password: '', confirmPassword: '',
-    // 2. Personal Details
     gender: '', fatherName: '', motherName: '', dateOfBirth: '', maritalStatus: '',
     currentAddress: '', permanentAddress: '', sameAsCurrent: false,
     district: '', state: '', pincode: '',
-    // 3. Experience Details
     experienceType: 'Fresher', totalExperienceYears: '', lastCompanyName: '',
-    // 4. Health Info
     hasDisease: 'No', diseaseName: '',
-    // 5. Job Details
     joiningDate: '', department: '', position: '', reportingManager: '', role: 'Employee', salary: '',
-    // 6. Education
     hscPercent: '', graduationCourse: '', graduationPercent: '', postGraduationCourse: '', postGraduationPercent: '',
-    // 7. ID Proofs
     aadhaarNumber: '', panNumber: '',
-    // 8. Bank Details
     accountHolderName: '', bankName: '', accountNumber: '', ifsc: '', branch: '',
-    // 9. Emergency Contact
     emergencyContactName: '', emergencyContactRelationship: '', emergencyContactMobile: '', emergencyContactAddress: '',
   });
+
+  const [existingUrls, setExistingUrls] = useState({});
 
   const [files, setFiles] = useState({
     profileImage: null, twelfthMarksheet: null, graduationMarksheet: null, postGraduationMarksheet: null,
@@ -101,10 +112,50 @@ const CreateEmployee = () => {
   });
 
   useEffect(() => {
-    api.get('/employees/next-code')
-      .then(({ data }) => setNextCode(data.data.nextCode))
-      .catch(() => setNextCode('IA00001'));
-  }, []);
+    fetchEmployee();
+  }, [id]);
+
+  const fetchEmployee = async () => {
+    try {
+      const { data } = await api.get(`/employees/${id}`);
+      const emp = data.data;
+      setEmployeeCode(emp.employeeCode);
+      setImagePreview(emp.profileImageUrl);
+      
+      setForm({
+        name: emp.name || '', email: emp.email || '', mobileNumber: emp.mobileNumber || '', alternateMobileNumber: emp.alternateMobileNumber || '',
+        password: '', confirmPassword: '',
+        gender: emp.gender || '', fatherName: emp.fatherName || '', motherName: emp.motherName || '', 
+        dateOfBirth: emp.dateOfBirth ? emp.dateOfBirth.split('T')[0] : '', 
+        maritalStatus: emp.maritalStatus || '',
+        currentAddress: emp.currentAddress || '', permanentAddress: emp.permanentAddress || '', sameAsCurrent: false,
+        district: emp.district || '', state: emp.state || '', pincode: emp.pincode || '',
+        experienceType: emp.experienceType || 'Fresher', totalExperienceYears: emp.totalExperienceYears || '', lastCompanyName: emp.lastCompanyName || '',
+        hasDisease: emp.hasDisease || 'No', diseaseName: emp.diseaseName || '',
+        joiningDate: emp.joiningDate ? emp.joiningDate.split('T')[0] : '', 
+        department: emp.department || '', position: emp.position || '', reportingManager: emp.reportingManager || '', role: emp.role || 'Employee', salary: emp.salary || '',
+        hscPercent: emp.hscPercent || '', graduationCourse: emp.graduationCourse || '', graduationPercent: emp.graduationPercent || '', postGraduationCourse: emp.postGraduationCourse || '', postGraduationPercent: emp.postGraduationPercent || '',
+        aadhaarNumber: emp.aadhaarNumber || '', panNumber: emp.panNumber || '',
+        accountHolderName: emp.accountHolderName || '', bankName: emp.bankName || '', accountNumber: emp.accountNumber || '', ifsc: emp.ifsc || '', branch: emp.branch || '',
+        emergencyContactName: emp.emergencyContactName || '', emergencyContactRelationship: emp.emergencyContactRelationship || '', emergencyContactMobile: emp.emergencyContactMobile || '', emergencyContactAddress: emp.emergencyContactAddress || '',
+      });
+
+      setExistingUrls({
+        twelfthMarksheet: emp.twelfthMarksheetUrl,
+        graduationMarksheet: emp.graduationMarksheetUrl,
+        postGraduationMarksheet: emp.postGraduationMarksheetUrl,
+        experienceCertificate: emp.experienceCertificateUrl,
+        aadhaarFile: emp.aadhaarFileUrl,
+        panFile: emp.panFileUrl,
+        passbookFile: emp.passbookFileUrl,
+      });
+
+      setInitLoading(false);
+    } catch (err) {
+      toast.error('Failed to load employee details');
+      navigate('/employees');
+    }
+  };
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -117,7 +168,6 @@ const CreateEmployee = () => {
       setForm(f => {
         const val = type === 'checkbox' ? checked : value;
         const newForm = { ...f, [name]: val };
-        // Sync permanent address if sameAsCurrent is checked
         if (name === 'currentAddress' && f.sameAsCurrent) {
           newForm.permanentAddress = val;
         }
@@ -138,33 +188,21 @@ const CreateEmployee = () => {
 
   const validate = () => {
     if (!form.name) return 'Name is required';
-    if (!form.email || !/^\S+@\S+\.\S+$/.test(form.email)) return 'Valid email is required';
-    if (!form.mobileNumber || form.mobileNumber.length < 10) return 'Valid mobile number is required';
+    if (!form.email) return 'Email is required';
+    if (!form.mobileNumber) return 'Mobile number is required';
     if (form.password && form.password !== form.confirmPassword) return 'Passwords do not match';
-    
     if (!form.gender) return 'Gender is required';
     if (!form.dateOfBirth) return 'Date of Birth is required';
     if (!form.maritalStatus) return 'Marital Status is required';
-    if (!files.profileImage) return 'Profile Photo is required';
     if (!form.currentAddress || !form.permanentAddress) return 'Addresses are required';
-    
-    if (form.experienceType === 'Experienced' && (!form.totalExperienceYears || !files.experienceCertificate)) {
-      return 'Experience years and certificate are required for experienced candidates';
-    }
-
+    if (form.experienceType === 'Experienced' && !form.totalExperienceYears) return 'Experience years are required';
     if (!form.joiningDate) return 'Joining Date is required';
     if (!form.department || !form.position || !form.role || !form.salary) return 'All Job details are required';
-
-    if (!form.hscPercent || !files.twelfthMarksheet) return '12th/Diploma details and marksheet are required';
-    if (!form.graduationCourse || !form.graduationPercent || !files.graduationMarksheet) return 'Graduation details and marksheet are required';
-
-    if (!form.aadhaarNumber || !files.aadhaarFile) return 'Aadhaar details are required';
-    if (!form.panNumber || !files.panFile) return 'PAN details are required';
-
-    if (!form.accountHolderName || !form.bankName || !form.accountNumber || !form.ifsc || !files.passbookFile) return 'All Bank details and Passbook are required';
-
+    if (!form.hscPercent) return '12th/Diploma percentage is required';
+    if (!form.graduationCourse || !form.graduationPercent) return 'Graduation details are required';
+    if (!form.aadhaarNumber || !form.panNumber) return 'Aadhaar and PAN numbers are required';
+    if (!form.accountHolderName || !form.bankName || !form.accountNumber || !form.ifsc) return 'All Bank details are required';
     if (!form.emergencyContactName || !form.emergencyContactMobile) return 'Emergency contact name and mobile are required';
-
     return null;
   };
 
@@ -187,15 +225,19 @@ const CreateEmployee = () => {
         if (file) fd.append(k, file);
       });
 
-      await api.post('/employees', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      toast.success(`✅ Employee ${nextCode} created successfully!`);
+      await api.put(`/employees/${id}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success(`✅ Employee ${employeeCode} updated successfully!`);
       navigate('/employees');
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to create employee');
+      toast.error(err.response?.data?.message || 'Failed to update employee');
     } finally {
       setLoading(false);
     }
   };
+
+  if (initLoading) {
+    return <AppShell><div style={{ padding: '60px', textAlign: 'center' }}><Loader2 size={32} className="spin" style={{ margin: '0 auto', color: 'var(--color-primary)' }} /></div></AppShell>;
+  }
 
   return (
     <AppShell>
@@ -208,13 +250,13 @@ const CreateEmployee = () => {
               <ArrowLeft size={20} color="var(--color-text)" />
             </button>
             <div>
-              <h1 style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--color-text)', margin: 0 }}>Add New Employee</h1>
-              <p style={{ color: 'var(--color-text-tertiary)', margin: '4px 0 0 0', fontSize: '0.9rem' }}>Fill in the details to register a new team member.</p>
+              <h1 style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--color-text)', margin: 0 }}>Edit Employee</h1>
+              <p style={{ color: 'var(--color-text-tertiary)', margin: '4px 0 0 0', fontSize: '0.9rem' }}>Update information for employee {form.name}.</p>
             </div>
           </div>
           <div style={{ background: 'rgba(32, 118, 199, 0.1)', border: '1px solid rgba(32, 118, 199, 0.2)', padding: '8px 16px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
             <span style={{ fontSize: '0.85rem', color: '#2076C7', fontWeight: 600 }}>Employee Code</span>
-            <code style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--color-text)' }}>{nextCode}</code>
+            <code style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--color-text)' }}>{employeeCode}</code>
           </div>
         </div>
 
@@ -226,19 +268,19 @@ const CreateEmployee = () => {
               <input className="input-field" name="name" value={form.name} onChange={handleChange} placeholder="John Doe" />
             </Field>
             <Field label="Email Address *">
-              <input className="input-field" type="email" name="email" value={form.email} onChange={handleChange} placeholder="john.doe@company.com" />
+              <input className="input-field" type="email" name="email" value={form.email} onChange={handleChange} placeholder="john.doe@company.com" disabled style={{ opacity: 0.7 }} />
             </Field>
             <Field label="Mobile Number *">
-              <input className="input-field" name="mobileNumber" value={form.mobileNumber} onChange={handleChange} placeholder="9876543210" maxLength={15} />
+              <input className="input-field" name="mobileNumber" value={form.mobileNumber} onChange={handleChange} placeholder="9876543210" maxLength={15} disabled style={{ opacity: 0.7 }} />
             </Field>
             <Field label="Alternate Mobile Number">
               <input className="input-field" name="alternateMobileNumber" value={form.alternateMobileNumber} onChange={handleChange} placeholder="Optional" maxLength={15} />
             </Field>
-            <Field label="Password">
-              <input className="input-field" type="password" name="password" value={form.password} onChange={handleChange} placeholder="Min 6 characters" />
+            <Field label="New Password">
+              <input className="input-field" type="password" name="password" value={form.password} onChange={handleChange} placeholder="Leave blank to keep current" />
             </Field>
-            <Field label="Confirm Password">
-              <input className="input-field" type="password" name="confirmPassword" value={form.confirmPassword} onChange={handleChange} placeholder="Match password" />
+            <Field label="Confirm New Password">
+              <input className="input-field" type="password" name="confirmPassword" value={form.confirmPassword} onChange={handleChange} placeholder="Match new password" />
             </Field>
           </FormSection>
 
@@ -247,7 +289,7 @@ const CreateEmployee = () => {
              <div style={{ gridColumn: '1 / -1', display: 'flex', gap: '24px', alignItems: 'flex-start', marginBottom: '10px' }}>
                 {/* Profile Photo Upload */}
                 <div>
-                  <label className="form-label">Profile Photo *</label>
+                  <label className="form-label">Profile Photo</label>
                   <label style={{ 
                     cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', 
                     width: '120px', height: '120px', borderRadius: '16px', border: '2px dashed var(--color-border)', 
@@ -333,7 +375,7 @@ const CreateEmployee = () => {
                   <input className="input-field" name="lastCompanyName" value={form.lastCompanyName} onChange={handleChange} />
                 </Field>
                 <div style={{ gridColumn: '1 / -1', marginTop: '8px' }}>
-                  <FileUploadField label="Experience Certificates" onChange={(f) => handleFileChange('experienceCertificate', f)} file={files.experienceCertificate} required={true} />
+                  <FileUploadField label="Experience Certificates" onChange={(f) => handleFileChange('experienceCertificate', f)} file={files.experienceCertificate} existingUrl={existingUrls.experienceCertificate} required={false} />
                 </div>
               </>
             )}
@@ -393,7 +435,7 @@ const CreateEmployee = () => {
                 <Field label="Percentage *">
                   <input className="input-field" type="number" step="0.01" name="hscPercent" value={form.hscPercent} onChange={handleChange} placeholder="e.g. 85.50" />
                 </Field>
-                <FileUploadField label="12th/Diploma Marksheet" onChange={(f) => handleFileChange('twelfthMarksheet', f)} file={files.twelfthMarksheet} required={true} />
+                <FileUploadField label="12th/Diploma Marksheet" onChange={(f) => handleFileChange('twelfthMarksheet', f)} file={files.twelfthMarksheet} existingUrl={existingUrls.twelfthMarksheet} required={false} />
               </div>
             </div>
 
@@ -411,7 +453,7 @@ const CreateEmployee = () => {
                   <input className="input-field" type="number" step="0.01" name="graduationPercent" value={form.graduationPercent} onChange={handleChange} placeholder="e.g. 75.00" />
                 </Field>
                 <div style={{ gridColumn: '1 / -1' }}>
-                  <FileUploadField label="Graduation Marksheet" onChange={(f) => handleFileChange('graduationMarksheet', f)} file={files.graduationMarksheet} required={true} />
+                  <FileUploadField label="Graduation Marksheet" onChange={(f) => handleFileChange('graduationMarksheet', f)} file={files.graduationMarksheet} existingUrl={existingUrls.graduationMarksheet} required={false} />
                 </div>
               </div>
             </div>
@@ -430,7 +472,7 @@ const CreateEmployee = () => {
                   <input className="input-field" type="number" step="0.01" name="postGraduationPercent" value={form.postGraduationPercent} onChange={handleChange} placeholder="e.g. 80.00" />
                 </Field>
                 <div style={{ gridColumn: '1 / -1' }}>
-                  <FileUploadField label="PG Marksheet" onChange={(f) => handleFileChange('postGraduationMarksheet', f)} file={files.postGraduationMarksheet} required={false} />
+                  <FileUploadField label="PG Marksheet" onChange={(f) => handleFileChange('postGraduationMarksheet', f)} file={files.postGraduationMarksheet} existingUrl={existingUrls.postGraduationMarksheet} required={false} />
                 </div>
               </div>
             </div>
@@ -446,7 +488,7 @@ const CreateEmployee = () => {
                   <Field label="Aadhaar Number *">
                     <input className="input-field" name="aadhaarNumber" value={form.aadhaarNumber} onChange={handleChange} placeholder="XXXX XXXX XXXX" />
                   </Field>
-                  <FileUploadField label="Aadhaar Card File" onChange={(f) => handleFileChange('aadhaarFile', f)} file={files.aadhaarFile} required={true} />
+                  <FileUploadField label="Aadhaar Card File" onChange={(f) => handleFileChange('aadhaarFile', f)} file={files.aadhaarFile} existingUrl={existingUrls.aadhaarFile} required={false} />
                 </div>
               </div>
 
@@ -457,7 +499,7 @@ const CreateEmployee = () => {
                   <Field label="PAN Number *">
                     <input className="input-field" name="panNumber" value={form.panNumber} onChange={handleChange} placeholder="ABCDE1234F" style={{ textTransform: 'uppercase' }} />
                   </Field>
-                  <FileUploadField label="PAN Card File" onChange={(f) => handleFileChange('panFile', f)} file={files.panFile} required={true} />
+                  <FileUploadField label="PAN Card File" onChange={(f) => handleFileChange('panFile', f)} file={files.panFile} existingUrl={existingUrls.panFile} required={false} />
                 </div>
               </div>
             </div>
@@ -481,7 +523,7 @@ const CreateEmployee = () => {
               <input className="input-field" name="branch" value={form.branch} onChange={handleChange} placeholder="Branch Location" />
             </Field>
             <div style={{ gridColumn: '1 / -1', marginTop: '12px' }}>
-              <FileUploadField label="Bank Passbook / Cancelled Cheque" onChange={(f) => handleFileChange('passbookFile', f)} file={files.passbookFile} required={true} />
+              <FileUploadField label="Bank Passbook / Cancelled Cheque" onChange={(f) => handleFileChange('passbookFile', f)} file={files.passbookFile} existingUrl={existingUrls.passbookFile} required={false} />
             </div>
           </FormSection>
 
@@ -507,7 +549,7 @@ const CreateEmployee = () => {
               Cancel
             </button>
             <button type="submit" className="btn-primary" disabled={loading} style={{ padding: '12px 32px', fontSize: '1rem', minWidth: '200px' }}>
-              {loading ? <><Loader2 size={20} className="spin" /> Processing...</> : <><Check size={20} /> Save Employee</>}
+              {loading ? <><Loader2 size={20} className="spin" /> Processing...</> : <><Check size={20} /> Save Updates</>}
             </button>
           </div>
         </form>
@@ -521,4 +563,4 @@ const CreateEmployee = () => {
   );
 };
 
-export default CreateEmployee;
+export default EditEmployee;

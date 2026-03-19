@@ -6,7 +6,7 @@ import {
   getEmployeeById,
   createEmployee,
   updateEmployee,
-  deactivateEmployee,
+  toggleEmployeeStatus,
   getDepartments,
 } from '../controllers/employee.controller.js';
 import { verifyJWT } from '../middleware/auth.middleware.js';
@@ -37,6 +37,6 @@ router.get('/', authorizeRoles(...CAN_CREATE_EMPLOYEE, 'Manager'), getAllEmploye
 router.get('/:id', getEmployeeById);
 router.post('/', authorizeRoles(...CAN_CREATE_EMPLOYEE), documentFields, createEmployee);
 router.put('/:id', authorizeRoles(...CAN_EDIT_EMPLOYEE), documentFields, updateEmployee);
-router.patch('/:id/deactivate', authorizeRoles('SuperUser', 'HR'), deactivateEmployee);
+router.patch('/:id/status', authorizeRoles(...CAN_EDIT_EMPLOYEE), toggleEmployeeStatus);
 
 export default router;

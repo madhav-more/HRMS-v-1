@@ -31,6 +31,7 @@ const employeeSchema = new mongoose.Schema(
     mobileNumber: { type: String, required: true, trim: true },
     alternateMobileNumber: { type: String, trim: true },
     gender: { type: String, enum: ['Male', 'Female', 'Other'] },
+    bloodGroup: { type: String, enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] },
     dateOfBirth: { type: Date },
     maritalStatus: { type: String, enum: ['Single', 'Married', 'Divorced', 'Widowed'] },
     profileImageUrl: { type: String }, // Cloudinary URL

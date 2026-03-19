@@ -11,6 +11,8 @@ import { errorHandler, notFoundHandler } from './middleware/error.middleware.js'
 import authRoutes from './routes/auth.routes.js';
 import attendanceRoutes from './routes/attendance.routes.js';
 import employeeRoutes from './routes/employee.routes.js';
+import leaveRoutes from './routes/leave.routes.js';
+import announcementRoutes from './routes/announcement.routes.js';
 
 const app = express();
 
@@ -41,6 +43,8 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/employees', employeeRoutes);
+app.use('/api/leaves', leaveRoutes);
+app.use('/api/announcements', announcementRoutes);
 
 // ─── ERROR HANDLING ────────────────────────────────────────────────────────
 app.use(notFoundHandler);
