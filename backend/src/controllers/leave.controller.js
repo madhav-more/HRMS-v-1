@@ -1,5 +1,4 @@
-import { Leave } from '../models/Leave.model.js';
-import { Employee } from '../models/Employee.model.js';
+import { query, pool } from '../config/db.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -12,102 +11,113 @@ const ADMIN_ROLES = ['SuperUser', 'HR', 'Director'];
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Set initial approval chain based on the applicant's role.
- * Mirrors the .NET SetApprovalFlow logic.
- */
 function buildInitialApprovalState(applicantRole) {
   switch (applicantRole) {
     case 'Employee':
     case 'Intern':
-      // Full chain: HR → GM → Director
-      return {
-        hrStatus: 'Pending',
-        gmStatus: 'Pending',
-        directorStatus: 'Pending',
-        overallStatus: 'Pending',
-        currentApproverRole: 'HR',
-      };
-
+      return { hrStatus: 'Pending', gmStatus: 'Pending', directorStatus: 'Pending', overallStatus: 'Pending', currentApproverRole: 'HR' };
     case 'HR':
-      // HR applies: skip HR approval, start at GM
-      return {
-        hrStatus: '-',
-        gmStatus: 'Pending',
-        directorStatus: 'Pending',
-        overallStatus: 'Pending',
-        currentApproverRole: 'GM',
-      };
-
+      return { hrStatus: '-', gmStatus: 'Pending', directorStatus: 'Pending', overallStatus: 'Pending', currentApproverRole: 'GM' };
     case 'GM':
     case 'Manager':
-      // GM applies: skip HR & GM, start at Director
-      return {
-        hrStatus: '-',
-        gmStatus: '-',
-        directorStatus: 'Pending',
-        overallStatus: 'Pending',
-        currentApproverRole: 'Director',
-      };
-
     case 'VP':
-      // VP same as GM for simplicity
-      return {
-        hrStatus: '-',
-        gmStatus: '-',
-        directorStatus: 'Pending',
-        overallStatus: 'Pending',
-        currentApproverRole: 'Director',
-      };
-
+      return { hrStatus: '-', gmStatus: '-', directorStatus: 'Pending', overallStatus: 'Pending', currentApproverRole: 'Director' };
     case 'Director':
     case 'SuperUser':
-      // Director/SuperUser: self-approved
-      return {
-        hrStatus: '-',
-        gmStatus: '-',
-        directorStatus: '-',
-        overallStatus: 'Approved',
-        currentApproverRole: 'Completed',
-      };
-
+      return { hrStatus: '-', gmStatus: '-', directorStatus: '-', overallStatus: 'Approved', currentApproverRole: 'Completed' };
     default:
-      return {
-        hrStatus: 'Pending',
-        gmStatus: 'Pending',
-        directorStatus: 'Pending',
-        overallStatus: 'Pending',
-        currentApproverRole: 'HR',
-      };
+      return { hrStatus: 'Pending', gmStatus: 'Pending', directorStatus: 'Pending', overallStatus: 'Pending', currentApproverRole: 'HR' };
   }
 }
 
-/**
- * Calculate total days between two dates (inclusive).
- */
 function calcTotalDays(start, end, halfDay) {
   if (halfDay) return 0.5;
   const ms = new Date(end).getTime() - new Date(start).getTime();
   return Math.round(ms / (1000 * 60 * 60 * 24)) + 1;
 }
 
-/**
- * Determine next approver role after a successful approval.
- */
-function getNextApproverRole(currentRole, leave) {
+function getNextApproverRole(currentRole, hrStatus, gmStatus, directorStatus) {
   if (currentRole === 'HR') {
-    // After HR, go to GM if gmStatus is still Pending
-    if (leave.gmStatus === 'Pending') return 'GM';
-    if (leave.directorStatus === 'Pending') return 'Director';
+    if (gmStatus === 'Pending') return 'GM';
+    if (directorStatus === 'Pending') return 'Director';
     return 'Completed';
   }
   if (currentRole === 'GM') {
-    if (leave.directorStatus === 'Pending') return 'Director';
+    if (directorStatus === 'Pending') return 'Director';
     return 'Completed';
   }
   if (currentRole === 'Director') return 'Completed';
   return 'Completed';
 }
+
+/**
+ * Fetch a leave with employee info joined
+ */
+const fetchLeaveWithEmployee = async (leaveId) => {
+  const { rows } = await query(`
+    SELECT 
+      l.*,
+      e.name AS emp_name,
+      e.employee_code AS emp_code,
+      e.department AS emp_department,
+      e.role AS emp_role,
+      e.profile_image_url AS emp_profile_image_url,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'action', lah.action,
+            'byEmployeeId', lah.by_employee_id,
+            'byName', lah.by_name,
+            'byRole', lah.by_role,
+            'remarks', lah.remarks,
+            'timestamp', lah.timestamp
+          ) ORDER BY lah.timestamp ASC
+        ) FILTER (WHERE lah.id IS NOT NULL),
+        '[]'
+      ) AS action_history
+    FROM leaves l
+    LEFT JOIN employees e ON l.employee_id = e.id
+    LEFT JOIN leave_action_history lah ON lah.leave_id = l.id
+    WHERE l.id = $1
+    GROUP BY l.id, e.name, e.employee_code, e.department, e.role, e.profile_image_url
+  `, [leaveId]);
+
+  if (!rows[0]) return null;
+  return formatLeave(rows[0]);
+};
+
+const formatLeave = (row) => ({
+  _id: row.id,
+  employeeId: {
+    _id: row.employee_id,
+    name: row.emp_name,
+    employeeCode: row.emp_code,
+    department: row.emp_department,
+    role: row.emp_role,
+    profileImageUrl: row.emp_profile_image_url,
+  },
+  leaveType: row.leave_type,
+  startDate: row.start_date,
+  endDate: row.end_date,
+  totalDays: row.total_days,
+  halfDay: row.half_day,
+  halfDayPeriod: row.half_day_period,
+  reason: row.reason,
+  hrStatus: row.hr_status,
+  gmStatus: row.gm_status,
+  directorStatus: row.director_status,
+  overallStatus: row.overall_status,
+  currentApproverRole: row.current_approver_role,
+  hrRemarks: row.hr_remarks,
+  gmRemarks: row.gm_remarks,
+  directorRemarks: row.director_remarks,
+  cancelledBy: row.cancelled_by,
+  cancelledAt: row.cancelled_at,
+  cancelReason: row.cancel_reason,
+  actionHistory: row.action_history || [],
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // APPLY FOR LEAVE
@@ -121,50 +131,52 @@ export const applyLeave = asyncHandler(async (req, res) => {
 
   const start = new Date(startDate);
   const end = endDate ? new Date(endDate) : start;
-
   if (end < start) throw new ApiError(400, 'endDate cannot be before startDate');
 
   const totalDays = calcTotalDays(start, end, halfDay);
-  const approvalState = buildInitialApprovalState(req.user.role);
+  const state = buildInitialApprovalState(req.user.role);
 
-  const leave = await Leave.create({
-    employeeId: req.user._id,
-    leaveType,
-    startDate: start,
-    endDate: end,
-    totalDays,
-    halfDay,
-    halfDayPeriod: halfDay ? halfDayPeriod : '',
-    reason,
-    ...approvalState,
-    actionHistory: [
-      {
-        action: 'Applied',
-        byEmployeeId: req.user._id,
-        byName: req.user.name,
-        byRole: req.user.role,
-        remarks: reason,
-        timestamp: new Date(),
-      },
-    ],
-  });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  // Auto-complete for Director/SuperUser
-  if (approvalState.overallStatus === 'Approved') {
-    leave.actionHistory.push({
-      action: 'Approved',
-      byEmployeeId: req.user._id,
-      byName: req.user.name,
-      byRole: req.user.role,
-      remarks: 'Auto-approved for senior role',
-      timestamp: new Date(),
-    });
-    await leave.save();
+    const { rows: leaveRows } = await client.query(`
+      INSERT INTO leaves (
+        employee_id, leave_type, start_date, end_date, total_days, half_day, half_day_period, reason,
+        hr_status, gm_status, director_status, overall_status, current_approver_role
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+      RETURNING id
+    `, [
+      req.user._id, leaveType, start, end, totalDays, halfDay, halfDay ? halfDayPeriod : '',
+      reason, state.hrStatus, state.gmStatus, state.directorStatus, state.overallStatus, state.currentApproverRole
+    ]);
+
+    const leaveId = leaveRows[0].id;
+
+    // Insert initial 'Applied' action history entry
+    await client.query(`
+      INSERT INTO leave_action_history (leave_id, action, by_employee_id, by_name, by_role, remarks)
+      VALUES ($1, 'Applied', $2, $3, $4, $5)
+    `, [leaveId, req.user._id, req.user.name, req.user.role, reason]);
+
+    // Auto-approve for Director/SuperUser
+    if (state.overallStatus === 'Approved') {
+      await client.query(`
+        INSERT INTO leave_action_history (leave_id, action, by_employee_id, by_name, by_role, remarks)
+        VALUES ($1, 'Approved', $2, $3, $4, 'Auto-approved for senior role')
+      `, [leaveId, req.user._id, req.user.name, req.user.role]);
+    }
+
+    await client.query('COMMIT');
+
+    const leave = await fetchLeaveWithEmployee(leaveId);
+    res.status(201).json(new ApiResponse(201, leave, 'Leave applied successfully'));
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
-
-  const populated = await Leave.findById(leave._id).populate('employeeId', 'name employeeCode department role');
-
-  res.status(201).json(new ApiResponse(201, populated, 'Leave applied successfully'));
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,48 +184,78 @@ export const applyLeave = asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 export const getMyLeaves = asyncHandler(async (req, res) => {
   const { page = 1, limit = 20, status, year } = req.query;
-  const query = { employeeId: req.user._id };
 
-  if (status && status !== 'All') query.overallStatus = status;
+  const conditions = [`l.employee_id = $1`];
+  const values = [req.user._id];
+  let index = 2;
+
+  if (status && status !== 'All') {
+    conditions.push(`l.overall_status = $${index++}`);
+    values.push(status);
+  }
   if (year) {
-    query.startDate = {
-      $gte: new Date(`${year}-01-01`),
-      $lte: new Date(`${year}-12-31`),
-    };
+    conditions.push(`EXTRACT(YEAR FROM l.start_date) = $${index++}`);
+    values.push(parseInt(year));
   }
 
+  const whereClause = `WHERE ${conditions.join(' AND ')}`;
   const skip = (Number(page) - 1) * Number(limit);
-  const [leaves, total] = await Promise.all([
-    Leave.find(query)
-      .populate('employeeId', 'name employeeCode department role profileImageUrl')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(Number(limit)),
-    Leave.countDocuments(query),
+
+  const baseQuery = `
+    FROM leaves l
+    LEFT JOIN employees e ON l.employee_id = e.id
+    LEFT JOIN leave_action_history lah ON lah.leave_id = l.id
+    ${whereClause}
+  `;
+
+  const countQ = `SELECT COUNT(DISTINCT l.id) ${baseQuery.split('LEFT JOIN leave_action_history')[0]}`;
+  const dataQ = `
+    SELECT 
+      l.*,
+      e.name AS emp_name, e.employee_code AS emp_code, e.department AS emp_department,
+      e.role AS emp_role, e.profile_image_url AS emp_profile_image_url,
+      COALESCE(
+        json_agg(
+          json_build_object('action', lah.action, 'byEmployeeId', lah.by_employee_id, 'byName', lah.by_name, 'byRole', lah.by_role, 'remarks', lah.remarks, 'timestamp', lah.timestamp)
+          ORDER BY lah.timestamp ASC
+        ) FILTER (WHERE lah.id IS NOT NULL), '[]'
+      ) AS action_history
+    ${baseQuery}
+    GROUP BY l.id, e.name, e.employee_code, e.department, e.role, e.profile_image_url
+    ORDER BY l.created_at DESC
+    LIMIT $${index} OFFSET $${index + 1}
+  `;
+
+  const [countRes, dataRes] = await Promise.all([
+    query(countQ, values),
+    query(dataQ, [...values, limit, skip]),
   ]);
+
+  const total = parseInt(countRes.rows[0].count);
+  const leaves = dataRes.rows.map(formatLeave);
 
   // Summary counts
-  const [totalCount, approvedCount, pendingCount, rejectedCount, cancelledCount] = await Promise.all([
-    Leave.countDocuments({ employeeId: req.user._id }),
-    Leave.countDocuments({ employeeId: req.user._id, overallStatus: 'Approved' }),
-    Leave.countDocuments({ employeeId: req.user._id, overallStatus: 'Pending' }),
-    Leave.countDocuments({ employeeId: req.user._id, overallStatus: 'Rejected' }),
-    Leave.countDocuments({ employeeId: req.user._id, overallStatus: 'Cancelled' }),
-  ]);
+  const { rows: summaryRows } = await query(`
+    SELECT 
+      COUNT(*) AS total,
+      COUNT(*) FILTER (WHERE overall_status = 'Approved') AS approved,
+      COUNT(*) FILTER (WHERE overall_status = 'Pending') AS pending,
+      COUNT(*) FILTER (WHERE overall_status = 'Rejected') AS rejected,
+      COUNT(*) FILTER (WHERE overall_status = 'Cancelled') AS cancelled
+    FROM leaves WHERE employee_id = $1
+  `, [req.user._id]);
+
+  const s = summaryRows[0];
 
   res.json(
-    new ApiResponse(
-      200,
-      {
-        leaves,
-        total,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(total / limit),
-        summary: { total: totalCount, approved: approvedCount, pending: pendingCount, rejected: rejectedCount, cancelled: cancelledCount },
+    new ApiResponse(200, {
+      leaves, total, page: Number(page), limit: Number(limit),
+      totalPages: Math.ceil(total / Number(limit)),
+      summary: {
+        total: parseInt(s.total), approved: parseInt(s.approved),
+        pending: parseInt(s.pending), rejected: parseInt(s.rejected), cancelled: parseInt(s.cancelled),
       },
-      'My leaves fetched'
-    )
+    }, 'My leaves fetched')
   );
 });
 
@@ -222,39 +264,36 @@ export const getMyLeaves = asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 export const getPendingLeaves = asyncHandler(async (req, res) => {
   const role = req.user.role;
+  let condition = '';
 
-  let query = {};
   switch (role) {
-    case 'HR':
-      query = { hrStatus: 'Pending', overallStatus: 'Pending' };
-      break;
+    case 'HR': condition = `l.hr_status = 'Pending' AND l.overall_status = 'Pending'`; break;
     case 'GM':
-    case 'Manager':
-      query = { hrStatus: { $in: ['Approved', '-'] }, gmStatus: 'Pending', overallStatus: 'Pending' };
-      break;
+    case 'Manager': condition = `l.hr_status IN ('Approved', '-') AND l.gm_status = 'Pending' AND l.overall_status = 'Pending'`; break;
     case 'VP':
-      query = { hrStatus: { $in: ['Approved', '-'] }, gmStatus: { $in: ['Approved', '-'] }, directorStatus: 'Pending', overallStatus: 'Pending' };
-      break;
-    case 'Director':
-      query = {
-        hrStatus: { $in: ['Approved', '-'] },
-        gmStatus: { $in: ['Approved', '-'] },
-        directorStatus: 'Pending',
-        overallStatus: 'Pending',
-      };
-      break;
-    case 'SuperUser':
-      query = { overallStatus: 'Pending' };
-      break;
-    default:
-      throw new ApiError(403, 'You do not have approval permissions');
+    case 'Director': condition = `l.hr_status IN ('Approved', '-') AND l.gm_status IN ('Approved', '-') AND l.director_status = 'Pending' AND l.overall_status = 'Pending'`; break;
+    case 'SuperUser': condition = `l.overall_status = 'Pending'`; break;
+    default: throw new ApiError(403, 'You do not have approval permissions');
   }
 
-  const leaves = await Leave.find(query)
-    .populate('employeeId', 'name employeeCode department role profileImageUrl')
-    .sort({ createdAt: -1 });
+  const { rows } = await query(`
+    SELECT 
+      l.*,
+      e.name AS emp_name, e.employee_code AS emp_code, e.department AS emp_department,
+      e.role AS emp_role, e.profile_image_url AS emp_profile_image_url,
+      COALESCE(
+        json_agg(json_build_object('action', lah.action, 'byEmployeeId', lah.by_employee_id, 'byName', lah.by_name, 'byRole', lah.by_role, 'remarks', lah.remarks, 'timestamp', lah.timestamp) ORDER BY lah.timestamp ASC)
+        FILTER (WHERE lah.id IS NOT NULL), '[]'
+      ) AS action_history
+    FROM leaves l
+    LEFT JOIN employees e ON l.employee_id = e.id
+    LEFT JOIN leave_action_history lah ON lah.leave_id = l.id
+    WHERE ${condition}
+    GROUP BY l.id, e.name, e.employee_code, e.department, e.role, e.profile_image_url
+    ORDER BY l.created_at DESC
+  `);
 
-  res.json(new ApiResponse(200, leaves, 'Pending leaves fetched'));
+  res.json(new ApiResponse(200, rows.map(formatLeave), 'Pending leaves fetched'));
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -262,55 +301,61 @@ export const getPendingLeaves = asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 export const getAllLeaves = asyncHandler(async (req, res) => {
   const { page = 1, limit = 30, status, leaveType, department, employeeId, year, month } = req.query;
-  const query = {};
 
-  if (status && status !== 'All') query.overallStatus = status;
-  if (leaveType) query.leaveType = leaveType;
-  if (employeeId) query.employeeId = employeeId;
+  const conditions = [];
+  const values = [];
+  let index = 1;
+
+  if (status && status !== 'All') { conditions.push(`l.overall_status = $${index++}`); values.push(status); }
+  if (leaveType) { conditions.push(`l.leave_type = $${index++}`); values.push(leaveType); }
+  if (employeeId) { conditions.push(`l.employee_id = $${index++}`); values.push(employeeId); }
+  if (department) { conditions.push(`e.department = $${index++}`); values.push(department); }
 
   if (year || month) {
     const y = year ? parseInt(year) : new Date().getFullYear();
     const m = month ? parseInt(month) : null;
     if (m) {
-      query.startDate = {
-        $gte: new Date(y, m - 1, 1),
-        $lte: new Date(y, m, 0),
-      };
+      conditions.push(`l.start_date >= $${index++} AND l.start_date <= $${index++}`);
+      values.push(new Date(y, m - 1, 1), new Date(y, m, 0));
     } else {
-      query.startDate = {
-        $gte: new Date(`${y}-01-01`),
-        $lte: new Date(`${y}-12-31`),
-      };
+      conditions.push(`EXTRACT(YEAR FROM l.start_date) = $${index++}`);
+      values.push(y);
     }
   }
 
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const skip = (Number(page) - 1) * Number(limit);
-  let leavesQuery = Leave.find(query)
-    .populate('employeeId', 'name employeeCode department role profileImageUrl')
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(Number(limit));
 
-  // Filter by department (requires post-population filter)
-  let leaves = await leavesQuery;
-  if (department) {
-    leaves = leaves.filter((l) => l.employeeId?.department === department);
-  }
+  const countQ = `SELECT COUNT(DISTINCT l.id) FROM leaves l LEFT JOIN employees e ON l.employee_id = e.id ${whereClause}`;
+  const dataQ = `
+    SELECT 
+      l.*,
+      e.name AS emp_name, e.employee_code AS emp_code, e.department AS emp_department,
+      e.role AS emp_role, e.profile_image_url AS emp_profile_image_url,
+      COALESCE(
+        json_agg(json_build_object('action', lah.action, 'byEmployeeId', lah.by_employee_id, 'byName', lah.by_name, 'byRole', lah.by_role, 'remarks', lah.remarks, 'timestamp', lah.timestamp) ORDER BY lah.timestamp ASC)
+        FILTER (WHERE lah.id IS NOT NULL), '[]'
+      ) AS action_history
+    FROM leaves l
+    LEFT JOIN employees e ON l.employee_id = e.id
+    LEFT JOIN leave_action_history lah ON lah.leave_id = l.id
+    ${whereClause}
+    GROUP BY l.id, e.name, e.employee_code, e.department, e.role, e.profile_image_url
+    ORDER BY l.created_at DESC
+    LIMIT $${index} OFFSET $${index + 1}
+  `;
 
-  const total = await Leave.countDocuments(query);
+  const [countRes, dataRes] = await Promise.all([
+    query(countQ, values),
+    query(dataQ, [...values, limit, skip]),
+  ]);
 
+  const total = parseInt(countRes.rows[0].count);
   res.json(
-    new ApiResponse(
-      200,
-      {
-        leaves,
-        total,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(total / limit),
-      },
-      'All leaves fetched'
-    )
+    new ApiResponse(200, {
+      leaves: dataRes.rows.map(formatLeave), total,
+      page: Number(page), limit: Number(limit), totalPages: Math.ceil(total / Number(limit)),
+    }, 'All leaves fetched')
   );
 });
 
@@ -318,14 +363,10 @@ export const getAllLeaves = asyncHandler(async (req, res) => {
 // GET LEAVE BY ID
 // ─────────────────────────────────────────────────────────────────────────────
 export const getLeaveById = asyncHandler(async (req, res) => {
-  const leave = await Leave.findById(req.params.id).populate(
-    'employeeId',
-    'name employeeCode department role profileImageUrl'
-  );
+  const leave = await fetchLeaveWithEmployee(req.params.id);
   if (!leave) throw new ApiError(404, 'Leave not found');
 
-  // Owner or approver can view
-  const isOwner = leave.employeeId._id.toString() === req.user._id.toString();
+  const isOwner = leave.employeeId._id?.toString() === req.user._id.toString();
   const isApprover = APPROVER_ROLES.includes(req.user.role);
   if (!isOwner && !isApprover) throw new ApiError(403, 'Access denied');
 
@@ -337,82 +378,66 @@ export const getLeaveById = asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 export const approveLeave = asyncHandler(async (req, res) => {
   const { remarks = '' } = req.body;
-  const leave = await Leave.findById(req.params.id).populate('employeeId', 'name role');
+
+  const { rows: leaveRows } = await query('SELECT * FROM leaves WHERE id = $1', [req.params.id]);
+  const leave = leaveRows[0];
   if (!leave) throw new ApiError(404, 'Leave not found');
-  if (leave.overallStatus !== 'Pending') throw new ApiError(400, `Leave is already ${leave.overallStatus}`);
+  if (leave.overall_status !== 'Pending') throw new ApiError(400, `Leave is already ${leave.overall_status}`);
 
   const approverRole = req.user.role;
+  const updates = {};
 
-  // Validate correct stage
   switch (approverRole) {
     case 'HR':
-      if (leave.hrStatus !== 'Pending') throw new ApiError(400, 'Leave is not pending HR approval');
-      leave.hrStatus = 'Approved';
-      leave.hrRemarks = remarks;
-      break;
+      if (leave.hr_status !== 'Pending') throw new ApiError(400, 'Leave is not pending HR approval');
+      updates.hr_status = 'Approved'; updates.hr_remarks = remarks; break;
     case 'GM':
     case 'Manager':
-      if (leave.gmStatus !== 'Pending') throw new ApiError(400, 'Leave is not pending GM approval');
-      leave.gmStatus = 'Approved';
-      leave.gmRemarks = remarks;
-      break;
+      if (leave.gm_status !== 'Pending') throw new ApiError(400, 'Leave is not pending GM approval');
+      updates.gm_status = 'Approved'; updates.gm_remarks = remarks; break;
     case 'VP':
     case 'Director':
-      if (leave.directorStatus !== 'Pending') throw new ApiError(400, 'Leave is not pending Director/VP approval');
-      leave.directorStatus = 'Approved';
-      leave.directorRemarks = remarks;
-      break;
+      if (leave.director_status !== 'Pending') throw new ApiError(400, 'Leave is not pending Director/VP approval');
+      updates.director_status = 'Approved'; updates.director_remarks = remarks; break;
     case 'SuperUser':
-      // SuperUser can approve at any stage
-      if (leave.hrStatus === 'Pending') leave.hrStatus = 'Approved';
-      if (leave.gmStatus === 'Pending') leave.gmStatus = 'Approved';
-      if (leave.directorStatus === 'Pending') leave.directorStatus = 'Approved';
-      leave.hrRemarks = remarks;
-      leave.gmRemarks = remarks;
-      leave.directorRemarks = remarks;
+      if (leave.hr_status === 'Pending') updates.hr_status = 'Approved';
+      if (leave.gm_status === 'Pending') updates.gm_status = 'Approved';
+      if (leave.director_status === 'Pending') updates.director_status = 'Approved';
+      updates.hr_remarks = remarks; updates.gm_remarks = remarks; updates.director_remarks = remarks;
       break;
     default:
       throw new ApiError(403, 'You do not have approval permissions');
   }
 
-  // Check if all required stages are done
-  const nextRole = getNextApproverRole(approverRole === 'SuperUser' ? 'Director' : approverRole, leave);
+  // Compute merged state
+  const newHr = updates.hr_status ?? leave.hr_status;
+  const newGm = updates.gm_status ?? leave.gm_status;
+  const newDirector = updates.director_status ?? leave.director_status;
 
-  if (
-    nextRole === 'Completed' ||
-    approverRole === 'SuperUser' ||
-    (leave.hrStatus !== 'Pending' || leave.hrStatus === '-') &&
-    (leave.gmStatus !== 'Pending' || leave.gmStatus === '-') &&
-    (leave.directorStatus !== 'Pending' || leave.directorStatus === '-')
-  ) {
-    // Final approval
-    const allDone =
-      (leave.hrStatus === 'Approved' || leave.hrStatus === '-') &&
-      (leave.gmStatus === 'Approved' || leave.gmStatus === '-') &&
-      (leave.directorStatus === 'Approved' || leave.directorStatus === '-');
+  const allDone =
+    (newHr === 'Approved' || newHr === '-') &&
+    (newGm === 'Approved' || newGm === '-') &&
+    (newDirector === 'Approved' || newDirector === '-');
 
-    if (allDone) {
-      leave.overallStatus = 'Approved';
-      leave.currentApproverRole = 'Completed';
-    } else {
-      leave.currentApproverRole = nextRole;
-    }
+  if (allDone) {
+    updates.overall_status = 'Approved';
+    updates.current_approver_role = 'Completed';
   } else {
-    leave.currentApproverRole = nextRole;
+    const effectiveRole = approverRole === 'SuperUser' ? 'Director' : approverRole;
+    updates.current_approver_role = getNextApproverRole(effectiveRole, newHr, newGm, newDirector);
   }
 
-  leave.actionHistory.push({
-    action: 'Approved',
-    byEmployeeId: req.user._id,
-    byName: req.user.name,
-    byRole: req.user.role,
-    remarks,
-    timestamp: new Date(),
-  });
+  const setClauses = Object.keys(updates).map((k, i) => `${k} = $${i + 2}`).join(', ');
+  const vals = [req.params.id, ...Object.values(updates)];
 
-  await leave.save();
+  await query(`UPDATE leaves SET ${setClauses}, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, vals);
 
-  const updated = await Leave.findById(leave._id).populate('employeeId', 'name employeeCode department role');
+  await query(`
+    INSERT INTO leave_action_history (leave_id, action, by_employee_id, by_name, by_role, remarks)
+    VALUES ($1, 'Approved', $2, $3, $4, $5)
+  `, [req.params.id, req.user._id, req.user.name, req.user.role, remarks]);
+
+  const updated = await fetchLeaveWithEmployee(req.params.id);
   res.json(new ApiResponse(200, updated, 'Leave approved successfully'));
 });
 
@@ -421,51 +446,37 @@ export const approveLeave = asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 export const rejectLeave = asyncHandler(async (req, res) => {
   const { remarks = '' } = req.body;
-  const leave = await Leave.findById(req.params.id).populate('employeeId', 'name role');
+
+  const { rows: leaveRows } = await query('SELECT * FROM leaves WHERE id = $1', [req.params.id]);
+  const leave = leaveRows[0];
   if (!leave) throw new ApiError(404, 'Leave not found');
-  if (leave.overallStatus !== 'Pending') throw new ApiError(400, `Leave is already ${leave.overallStatus}`);
+  if (leave.overall_status !== 'Pending') throw new ApiError(400, `Leave is already ${leave.overall_status}`);
 
   const approverRole = req.user.role;
   if (!APPROVER_ROLES.includes(approverRole)) throw new ApiError(403, 'You do not have rejection permissions');
 
-  // Update relevant stage
+  const updates = { overall_status: 'Rejected', current_approver_role: 'Completed' };
+
   switch (approverRole) {
-    case 'HR':
-      leave.hrStatus = 'Rejected';
-      leave.hrRemarks = remarks;
-      break;
-    case 'GM':
-    case 'Manager':
-      leave.gmStatus = 'Rejected';
-      leave.gmRemarks = remarks;
-      break;
-    case 'VP':
-    case 'Director':
-      leave.directorStatus = 'Rejected';
-      leave.directorRemarks = remarks;
-      break;
+    case 'HR': updates.hr_status = 'Rejected'; updates.hr_remarks = remarks; break;
+    case 'GM': case 'Manager': updates.gm_status = 'Rejected'; updates.gm_remarks = remarks; break;
+    case 'VP': case 'Director': updates.director_status = 'Rejected'; updates.director_remarks = remarks; break;
     case 'SuperUser':
-      leave.hrStatus = leave.hrStatus === 'Pending' ? 'Rejected' : leave.hrStatus;
-      leave.gmStatus = leave.gmStatus === 'Pending' ? 'Rejected' : leave.gmStatus;
-      leave.directorStatus = leave.directorStatus === 'Pending' ? 'Rejected' : leave.directorStatus;
+      if (leave.hr_status === 'Pending') updates.hr_status = 'Rejected';
+      if (leave.gm_status === 'Pending') updates.gm_status = 'Rejected';
+      if (leave.director_status === 'Pending') updates.director_status = 'Rejected';
       break;
   }
 
-  leave.overallStatus = 'Rejected';
-  leave.currentApproverRole = 'Completed';
+  const setClauses = Object.keys(updates).map((k, i) => `${k} = $${i + 2}`).join(', ');
+  await query(`UPDATE leaves SET ${setClauses}, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [req.params.id, ...Object.values(updates)]);
 
-  leave.actionHistory.push({
-    action: 'Rejected',
-    byEmployeeId: req.user._id,
-    byName: req.user.name,
-    byRole: req.user.role,
-    remarks,
-    timestamp: new Date(),
-  });
+  await query(`
+    INSERT INTO leave_action_history (leave_id, action, by_employee_id, by_name, by_role, remarks)
+    VALUES ($1, 'Rejected', $2, $3, $4, $5)
+  `, [req.params.id, req.user._id, req.user.name, req.user.role, remarks]);
 
-  await leave.save();
-
-  const updated = await Leave.findById(leave._id).populate('employeeId', 'name employeeCode department role');
+  const updated = await fetchLeaveWithEmployee(req.params.id);
   res.json(new ApiResponse(200, updated, 'Leave rejected'));
 });
 
@@ -474,35 +485,34 @@ export const rejectLeave = asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 export const cancelLeave = asyncHandler(async (req, res) => {
   const { reason = '' } = req.body;
-  const leave = await Leave.findById(req.params.id);
+
+  const { rows: leaveRows } = await query('SELECT * FROM leaves WHERE id = $1', [req.params.id]);
+  const leave = leaveRows[0];
   if (!leave) throw new ApiError(404, 'Leave not found');
 
-  const isOwner = leave.employeeId.toString() === req.user._id.toString();
+  const isOwner = leave.employee_id.toString() === req.user._id.toString();
   const isAdmin = ADMIN_ROLES.includes(req.user.role);
-
   if (!isOwner && !isAdmin) throw new ApiError(403, 'You can only cancel your own leave');
 
-  if (leave.overallStatus !== 'Pending') {
-    throw new ApiError(400, `Cannot cancel a leave that is already ${leave.overallStatus}`);
+  if (leave.overall_status !== 'Pending') {
+    throw new ApiError(400, `Cannot cancel a leave that is already ${leave.overall_status}`);
   }
 
-  leave.overallStatus = 'Cancelled';
-  leave.cancelledBy = req.user._id;
-  leave.cancelledAt = new Date();
-  leave.cancelReason = reason;
-  leave.currentApproverRole = 'Completed';
+  const now = new Date();
+  await query(`
+    UPDATE leaves SET
+      overall_status = 'Cancelled', cancelled_by = $1, cancelled_at = $2,
+      cancel_reason = $3, current_approver_role = 'Completed', updated_at = CURRENT_TIMESTAMP
+    WHERE id = $4
+  `, [req.user._id, now, reason, req.params.id]);
 
-  leave.actionHistory.push({
-    action: 'Cancelled',
-    byEmployeeId: req.user._id,
-    byName: req.user.name,
-    byRole: req.user.role,
-    remarks: reason,
-    timestamp: new Date(),
-  });
+  await query(`
+    INSERT INTO leave_action_history (leave_id, action, by_employee_id, by_name, by_role, remarks)
+    VALUES ($1, 'Cancelled', $2, $3, $4, $5)
+  `, [req.params.id, req.user._id, req.user.name, req.user.role, reason]);
 
-  await leave.save();
-  res.json(new ApiResponse(200, leave, 'Leave cancelled'));
+  const updated = await fetchLeaveWithEmployee(req.params.id);
+  res.json(new ApiResponse(200, updated, 'Leave cancelled'));
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -513,44 +523,37 @@ export const getLeaveStats = asyncHandler(async (req, res) => {
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
-  const [
-    totalPending,
-    hrPending,
-    gmPending,
-    directorPending,
-    approvedThisMonth,
-    rejectedThisMonth,
-    totalThisMonth,
-    byType,
-    byStatus,
-  ] = await Promise.all([
-    Leave.countDocuments({ overallStatus: 'Pending' }),
-    Leave.countDocuments({ hrStatus: 'Pending', overallStatus: 'Pending' }),
-    Leave.countDocuments({ hrStatus: { $in: ['Approved', '-'] }, gmStatus: 'Pending', overallStatus: 'Pending' }),
-    Leave.countDocuments({
-      hrStatus: { $in: ['Approved', '-'] },
-      gmStatus: { $in: ['Approved', '-'] },
-      directorStatus: 'Pending',
-      overallStatus: 'Pending',
-    }),
-    Leave.countDocuments({ overallStatus: 'Approved', startDate: { $gte: startOfMonth, $lte: endOfMonth } }),
-    Leave.countDocuments({ overallStatus: 'Rejected', startDate: { $gte: startOfMonth, $lte: endOfMonth } }),
-    Leave.countDocuments({ startDate: { $gte: startOfMonth, $lte: endOfMonth } }),
-    Leave.aggregate([{ $group: { _id: '$leaveType', count: { $sum: 1 } } }]),
-    Leave.aggregate([{ $group: { _id: '$overallStatus', count: { $sum: 1 } } }]),
-  ]);
+  const { rows: statsRows } = await query(`
+    SELECT
+      COUNT(*) FILTER (WHERE overall_status = 'Pending') AS total_pending,
+      COUNT(*) FILTER (WHERE hr_status = 'Pending' AND overall_status = 'Pending') AS hr_pending,
+      COUNT(*) FILTER (WHERE hr_status IN ('Approved','-') AND gm_status = 'Pending' AND overall_status = 'Pending') AS gm_pending,
+      COUNT(*) FILTER (WHERE hr_status IN ('Approved','-') AND gm_status IN ('Approved','-') AND director_status = 'Pending' AND overall_status = 'Pending') AS director_pending,
+      COUNT(*) FILTER (WHERE overall_status = 'Approved' AND start_date >= $1 AND start_date <= $2) AS approved_this_month,
+      COUNT(*) FILTER (WHERE overall_status = 'Rejected' AND start_date >= $1 AND start_date <= $2) AS rejected_this_month,
+      COUNT(*) FILTER (WHERE start_date >= $1 AND start_date <= $2) AS total_this_month
+    FROM leaves
+  `, [startOfMonth, endOfMonth]);
 
+  const { rows: byType } = await query(`
+    SELECT leave_type AS "_id", COUNT(*) AS count FROM leaves GROUP BY leave_type
+  `);
+  const { rows: byStatus } = await query(`
+    SELECT overall_status AS "_id", COUNT(*) AS count FROM leaves GROUP BY overall_status
+  `);
+
+  const s = statsRows[0];
   res.json(
-    new ApiResponse(
-      200,
-      {
-        totalPending,
-        pendingByStage: { hr: hrPending, gm: gmPending, director: directorPending },
-        thisMonth: { total: totalThisMonth, approved: approvedThisMonth, rejected: rejectedThisMonth },
-        byType,
-        byStatus,
+    new ApiResponse(200, {
+      totalPending: parseInt(s.total_pending),
+      pendingByStage: { hr: parseInt(s.hr_pending), gm: parseInt(s.gm_pending), director: parseInt(s.director_pending) },
+      thisMonth: {
+        total: parseInt(s.total_this_month),
+        approved: parseInt(s.approved_this_month),
+        rejected: parseInt(s.rejected_this_month),
       },
-      'Leave stats fetched'
-    )
+      byType: byType.map((r) => ({ _id: r._id, count: parseInt(r.count) })),
+      byStatus: byStatus.map((r) => ({ _id: r._id, count: parseInt(r.count) })),
+    }, 'Leave stats fetched')
   );
 });

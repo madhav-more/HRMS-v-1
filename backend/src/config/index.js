@@ -4,7 +4,13 @@ dotenv.config();
 export const config = {
   port: process.env.PORT || 5000,
   nodeEnv: process.env.NODE_ENV || 'development',
-  mongoUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/hrms_db',
+  db: {
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT || '5432'),
+    user: process.env.DB_USER || 'postgres',
+    password: process.env.DB_PASSWORD || 'postgres',
+    database: process.env.DB_NAME || 'hrms_db',
+  },
   jwt: {
     accessSecret: process.env.JWT_ACCESS_SECRET || 'hrms_access_secret_2025',
     refreshSecret: process.env.JWT_REFRESH_SECRET || 'hrms_refresh_secret_2025',

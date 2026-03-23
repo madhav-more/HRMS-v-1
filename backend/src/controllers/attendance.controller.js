@@ -1,22 +1,53 @@
-import { Attendance } from '../models/Attendance.model.js';
-import { Employee } from '../models/Employee.model.js';
+import { query, pool } from '../config/db.js';
 import { ApiError } from '../utils/ApiError.js';
 import { ApiResponse } from '../utils/ApiResponse.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { isWithinOffice } from '../services/geo.service.js';
 import { config } from '../config/index.js';
 
-// Helper: get start-of-day in local time
-const startOfDay = (date = new Date()) => {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  return d;
-};
+// Helper: get today's date as a YYYY-MM-DD string
+const todayString = () => new Date().toISOString().split('T')[0];
 
-const endOfDay = (date = new Date()) => {
-  const d = new Date(date);
-  d.setHours(23, 59, 59, 999);
-  return d;
+const formatAttendance = (row) => {
+  if (!row) return null;
+  return {
+    _id: row.id,
+    employeeId: row.employee_id,
+    employeeCode: row.employee_code,
+    employeeName: row.employee_name,
+    date: row.date,
+    inTime: row.in_time,
+    outTime: row.out_time,
+    totalHours: row.total_hours,
+    totalMinutes: row.total_minutes,
+    status: row.status,
+    isLate: row.is_late,
+    lateMinutes: row.late_minutes,
+    isGeoAttendance: row.is_geo_attendance,
+    checkInLatitude: row.check_in_latitude,
+    checkInLongitude: row.check_in_longitude,
+    checkOutLatitude: row.check_out_latitude,
+    checkOutLongitude: row.check_out_longitude,
+    correctionRequested: row.correction_requested,
+    correctionStatus: row.correction_status,
+    correctionRemark: row.correction_remark,
+    correctionProofUrl: row.correction_proof_url,
+    correctionRequestedOn: row.correction_requested_on,
+    reviewedBy: row.reviewed_by,
+    reviewedOn: row.reviewed_on,
+    requestedByRole: row.requested_by_role,
+    pendingWithRole: row.pending_with_role,
+    isCompOffCredited: row.is_comp_off_credited,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    // Virtual: formatted times
+    inTimeFormatted: row.in_time
+      ? new Date(row.in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+      : null,
+    outTimeFormatted: row.out_time
+      ? new Date(row.out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+      : null,
+  };
 };
 
 // ─── CHECK IN ─────────────────────────────────────────────────────────────────
@@ -37,53 +68,53 @@ export const checkIn = asyncHandler(async (req, res) => {
     );
   }
 
-  const today = startOfDay();
-
-  // ── BLOCK DUPLICATE CHECK-IN ──
-  const existing = await Attendance.findOne({
-    employeeCode: employee.employeeCode,
-    date: today,
-  });
-
-  if (existing?.inTime) {
-    throw new ApiError(400, 'Already checked in today');
-  }
-
+  const today = todayString();
   const now = new Date();
 
   // ── LATE CHECK (standard 9:30 AM start) ──
-  const lateThreshold = new Date(today);
+  const lateThreshold = new Date();
   lateThreshold.setHours(9, 30, 0, 0);
   const isLate = now > lateThreshold;
   const lateMinutes = isLate ? Math.round((now - lateThreshold) / 60000) : 0;
 
+  // ── CHECK EXISTING RECORD ──
+  const { rows: existing } = await query(
+    'SELECT * FROM attendance WHERE employee_code = $1 AND date = $2',
+    [employee.employeeCode, today]
+  );
+  const existingRecord = existing[0];
+
+  if (existingRecord?.in_time) {
+    throw new ApiError(400, 'Already checked in today');
+  }
+
   let attendance;
-  if (existing) {
-    existing.inTime = now;
-    existing.isGeoAttendance = true;
-    existing.checkInLatitude = parseFloat(latitude);
-    existing.checkInLongitude = parseFloat(longitude);
-    existing.status = 'P';
-    existing.isLate = isLate;
-    existing.lateMinutes = lateMinutes;
-    existing.correctionRequested = false;
-    existing.correctionStatus = 'None';
-    attendance = await existing.save();
+  if (existingRecord) {
+    // Update existing record (e.g., WO was set)
+    const { rows } = await query(`
+      UPDATE attendance SET
+        in_time = $1, is_geo_attendance = true, 
+        check_in_latitude = $2, check_in_longitude = $3,
+        status = 'P', is_late = $4, late_minutes = $5,
+        correction_requested = false, correction_status = 'None',
+        updated_at = CURRENT_TIMESTAMP
+      WHERE employee_code = $6 AND date = $7
+      RETURNING *
+    `, [now, parseFloat(latitude), parseFloat(longitude), isLate, lateMinutes, employee.employeeCode, today]);
+    attendance = formatAttendance(rows[0]);
   } else {
-    attendance = await Attendance.create({
-      employeeId: employee._id,
-      employeeCode: employee.employeeCode,
-      employeeName: employee.name,
-      date: today,
-      inTime: now,
-      status: 'P',
-      isGeoAttendance: true,
-      checkInLatitude: parseFloat(latitude),
-      checkInLongitude: parseFloat(longitude),
-      isLate,
-      lateMinutes,
-      correctionStatus: 'None',
-    });
+    const { rows } = await query(`
+      INSERT INTO attendance (
+        employee_id, employee_code, employee_name, date,
+        in_time, status, is_geo_attendance,
+        check_in_latitude, check_in_longitude, is_late, late_minutes, correction_status
+      ) VALUES ($1, $2, $3, $4, $5, 'P', true, $6, $7, $8, $9, 'None')
+      RETURNING *
+    `, [
+      employee._id, employee.employeeCode, employee.name, today,
+      now, parseFloat(latitude), parseFloat(longitude), isLate, lateMinutes
+    ]);
+    attendance = formatAttendance(rows[0]);
   }
 
   res.status(200).json(
@@ -109,21 +140,22 @@ export const checkOut = asyncHandler(async (req, res) => {
     );
   }
 
-  const today = startOfDay();
-  const attendance = await Attendance.findOne({
-    employeeCode: employee.employeeCode,
-    date: today,
-  });
+  const today = todayString();
+  const { rows: existing } = await query(
+    'SELECT * FROM attendance WHERE employee_code = $1 AND date = $2',
+    [employee.employeeCode, today]
+  );
+  const existingRecord = existing[0];
 
-  if (!attendance?.inTime) {
+  if (!existingRecord?.in_time) {
     throw new ApiError(400, 'No check-in found for today. Please check in first.');
   }
-  if (attendance.outTime) {
+  if (existingRecord.out_time) {
     throw new ApiError(400, 'Already checked out today');
   }
 
   const now = new Date();
-  const workedMs = now - attendance.inTime;
+  const workedMs = now - new Date(existingRecord.in_time);
   const totalMinutes = Math.round(workedMs / 60000);
   const totalHours = parseFloat((workedMs / 3600000).toFixed(2));
 
@@ -139,24 +171,21 @@ export const checkOut = asyncHandler(async (req, res) => {
     shortfallMinutes = shiftMinutes - totalMinutes;
   }
 
-  attendance.outTime = now;
-  attendance.totalHours = totalHours;
-  attendance.totalMinutes = totalMinutes;
-  attendance.checkOutLatitude = parseFloat(latitude);
-  attendance.checkOutLongitude = parseFloat(longitude);
-  await attendance.save();
+  const { rows } = await query(`
+    UPDATE attendance SET
+      out_time = $1, total_hours = $2, total_minutes = $3,
+      check_out_latitude = $4, check_out_longitude = $5,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE employee_code = $6 AND date = $7
+    RETURNING *
+  `, [now, totalHours, totalMinutes, parseFloat(latitude), parseFloat(longitude), employee.employeeCode, today]);
+
+  const attendance = formatAttendance(rows[0]);
 
   res.status(200).json(
     new ApiResponse(
       200,
-      {
-        attendance,
-        checkedOutAt: now,
-        totalHours,
-        totalMinutes,
-        overtimeMinutes,
-        shortfallMinutes,
-      },
+      { attendance, checkedOutAt: now, totalHours, totalMinutes, overtimeMinutes, shortfallMinutes },
       'Checked out successfully'
     )
   );
@@ -164,11 +193,13 @@ export const checkOut = asyncHandler(async (req, res) => {
 
 // ─── TODAY'S STATUS ───────────────────────────────────────────────────────────
 export const getTodayStatus = asyncHandler(async (req, res) => {
-  const today = startOfDay();
-  const record = await Attendance.findOne({
-    employeeCode: req.user.employeeCode,
-    date: today,
-  });
+  const today = todayString();
+  const { rows } = await query(
+    'SELECT * FROM attendance WHERE employee_code = $1 AND date = $2',
+    [req.user.employeeCode, today]
+  );
+
+  const record = rows.length > 0 ? formatAttendance(rows[0]) : null;
 
   const office = {
     lat: config.office.latitude,
@@ -184,42 +215,43 @@ export const getMySummary = asyncHandler(async (req, res) => {
   const employee = req.user;
   const { from, to } = req.query;
 
-  const start = from ? startOfDay(new Date(from)) : startOfDay(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
-  const end = to ? endOfDay(new Date(to)) : endOfDay(new Date());
+  const now = new Date();
+  const startDate = from
+    ? from
+    : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  const endDate = to
+    ? to
+    : now.toISOString().split('T')[0];
 
-  const records = await Attendance.find({
-    employeeCode: employee.employeeCode,
-    date: { $gte: start, $lte: end },
-  }).sort({ date: -1 });
+  const { rows: records } = await query(
+    `SELECT * FROM attendance WHERE employee_code = $1 AND date >= $2 AND date <= $3 ORDER BY date DESC`,
+    [employee.employeeCode, startDate, endDate]
+  );
 
   // ── Build daily summary ──
-  const summary = {
-    present: 0,
-    absent: 0,
-    weekOff: 0,
-    late: 0,
-    totalHours: 0,
-  };
-
+  const summary = { present: 0, absent: 0, weekOff: 0, late: 0, totalHours: 0 };
   const dailyList = [];
-  let current = new Date(start);
+
+  let current = new Date(startDate);
+  const end = new Date(endDate);
 
   while (current <= end) {
     const dateStr = current.toISOString().split('T')[0];
-    const record = records.find((r) => r.date.toISOString().split('T')[0] === dateStr);
+    const record = records.find((r) => {
+      const rDate = r.date instanceof Date ? r.date : new Date(r.date);
+      return rDate.toISOString().split('T')[0] === dateStr;
+    });
     const dow = current.getDay();
 
     if (dow === 0) {
-      // Sunday = Week Off
       dailyList.push({ date: new Date(current), status: 'WO', isWeekOff: true });
       summary.weekOff++;
     } else if (record) {
-      if (record.isLate) summary.late++;
-      if (record.inTime) summary.present++;
-      summary.totalHours += record.totalHours || 0;
-      dailyList.push(record);
+      if (record.is_late) summary.late++;
+      if (record.in_time) summary.present++;
+      summary.totalHours += parseFloat(record.total_hours || 0);
+      dailyList.push(formatAttendance(record));
     } else {
-      // No record = Absent
       dailyList.push({ date: new Date(current), status: 'A', isAbsent: true });
       summary.absent++;
     }
@@ -236,43 +268,49 @@ export const getMySummary = asyncHandler(async (req, res) => {
 export const getAdminAttendanceList = asyncHandler(async (req, res) => {
   const { from, to, search, statusFilter, page = 1, limit = 50 } = req.query;
 
-  const today = startOfDay();
-  const start = from ? startOfDay(new Date(from)) : today;
-  const end = to ? endOfDay(new Date(to)) : endOfDay(new Date());
+  const today = todayString();
+  const startDate = from ? from : today;
+  const endDate = to ? to : today;
 
-  const query = { date: { $gte: start, $lte: end } };
+  const conditions = [`a.date >= $1 AND a.date <= $2`];
+  const values = [startDate, endDate];
+  let index = 3;
 
   if (search) {
-    const employees = await Employee.find({
-      $or: [
-        { name: { $regex: search, $options: 'i' } },
-        { employeeCode: { $regex: search, $options: 'i' } },
-      ],
-    }).select('employeeCode');
-    query.employeeCode = { $in: employees.map((e) => e.employeeCode) };
+    conditions.push(`(a.employee_name ILIKE $${index} OR a.employee_code ILIKE $${index})`);
+    values.push(`%${search}%`);
+    index++;
   }
 
   if (statusFilter && statusFilter !== 'All') {
     if (statusFilter === 'Completed') {
-      query.outTime = { $ne: null };
+      conditions.push(`a.out_time IS NOT NULL`);
     } else if (statusFilter === 'NotCheckedOut') {
-      query.inTime = { $ne: null };
-      query.outTime = null;
+      conditions.push(`a.in_time IS NOT NULL AND a.out_time IS NULL`);
     } else {
-      query.status = statusFilter;
+      conditions.push(`a.status = $${index++}`);
+      values.push(statusFilter);
     }
   }
 
+  const whereClause = `WHERE ${conditions.join(' AND ')}`;
   const skip = (Number(page) - 1) * Number(limit);
-  const [records, total] = await Promise.all([
-    Attendance.find(query).sort({ date: -1 }).skip(skip).limit(Number(limit)),
-    Attendance.countDocuments(query),
+
+  const countQ = `SELECT COUNT(*) FROM attendance a ${whereClause}`;
+  const dataQ = `SELECT a.* FROM attendance a ${whereClause} ORDER BY a.date DESC LIMIT $${index} OFFSET $${index + 1}`;
+
+  const [countRes, dataRes] = await Promise.all([
+    query(countQ, values),
+    query(dataQ, [...values, limit, skip]),
   ]);
+
+  const total = parseInt(countRes.rows[0].count);
+  const records = dataRes.rows.map(formatAttendance);
 
   res.json(
     new ApiResponse(
       200,
-      { records, total, page: Number(page), limit: Number(limit), totalPages: Math.ceil(total / limit) },
+      { records, total, page: Number(page), limit: Number(limit), totalPages: Math.ceil(total / Number(limit)) },
       'Attendance list fetched'
     )
   );
